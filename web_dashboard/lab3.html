@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runner Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:16px}
+  h1{font-size:1.4rem;margin:0 0 4px}
+  .status{font-size:.85rem;color:#94a3b8;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px}
+  .card{background:#1e293b;border-radius:12px;padding:16px}
+  .card .label{font-size:.8rem;color:#94a3b8}
+  .card .value{font-size:2rem;font-weight:700;margin-top:4px}
+  .unit{font-size:1rem;color:#94a3b8;margin-left:4px}
+  #alertBox{padding:12px;border-radius:12px;background:#14532d;margin-bottom:12px;font-weight:600}
+  #alertBox.warn{background:#991b1b}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  button{border:0;border-radius:10px;padding:12px 18px;font-size:1rem;cursor:pointer;background:#334155;color:#fff}
+  button.on{background:#16a34a}
+  .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+</style>
+</head>
+<body>
+<h1>🏃 Runner Monitor</h1>
+<div class="status">MQTT: <span id="conn">đang kết nối...</span> · Chế độ: <span id="mode">-</span></div>
+
+<div id="alertBox">Trạng thái: Bình thường</div>
+
+<div class="grid">
+  <div class="card"><div class="label">Nhiệt độ</div><div class="value"><span class="temp">--</span><span class="unit">°C</span></div></div>
+  <div class="card"><div class="label">Áp suất khí quyển</div><div class="value"><span class="press">--</span><span class="unit">hPa</span></div></div>
+  <div class="card"><div class="label">Độ cao (so với mực nước biển)</div><div class="value"><span class="alt">--</span><span class="unit">m</span></div></div>
+</div>
+
+<div class="controls">
+  <button id="btnMode">Chế độ: AUTO (bấm để chuyển MANUAL)</button>
+  <button id="btnLed" class="btn-led">LED: OFF</button>
+  <button id="btnBuz" class="btn-buzzer">LOA: OFF</button>
+</div>
+
+<div class="charts">
+  <div class="card"><canvas id="chTemp"></canvas></div>
+  <div class="card"><canvas id="chAlt"></canvas></div>
+</div>
+
+<script>
+// ĐỔI cho trùng TOPIC_BASE trong sketch.ino
+const BASE = "runner_demo_01";
+const T = { data:BASE+"/data", led:BASE+"/cmd/led", buz:BASE+"/cmd/buzzer", mode:BASE+"/cmd/mode" };
+
+const client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt");
+let ledOn=false, buzOn=false, manual=false;
+
+client.on("connect", ()=>{ document.getElementById("conn").textContent="đã kết nối"; client.subscribe(T.data); });
+client.on("close",   ()=>{ document.getElementById("conn").textContent="mất kết nối"; });
+
+function makeChart(id,label,color){
+  return new Chart(document.getElementById(id),{
+    type:"line",
+    data:{labels:[],datasets:[{label,data:[],borderColor:color,tension:.3,pointRadius:0}]},
+    options:{animation:false,scales:{x:{ticks:{color:"#94a3b8",maxTicksLimit:6}},y:{ticks:{color:"#94a3b8"}}},
+             plugins:{legend:{labels:{color:"#e2e8f0"}}}}
+  });
+}
+const chTemp = makeChart("chTemp","Nhiệt độ (°C)","#f97316");
+const chAlt  = makeChart("chAlt","Độ cao (m)","#38bdf8");
+function push(ch,v){
+  const d=ch.data; d.labels.push(new Date().toLocaleTimeString()); d.datasets[0].data.push(v);
+  if(d.labels.length>60){d.labels.shift(); d.datasets[0].data.shift();}
+  ch.update();
+}
+
+const ALERT_TXT = {OK:"Bình thường",TEMP_HIGH:"⚠ Nhiệt độ quá cao!",TEMP_LOW:"⚠ Nhiệt độ quá thấp!",ALT_JUMP:"⚠ Độ cao thay đổi đột ngột (có thể ngã)!"};
+
+function setBtn(el,txt,on){ el.textContent=txt+(on?"ON":"OFF"); el.classList.toggle("on",on); }
+
+client.on("message",(topic,payload)=>{
+  if(topic!==T.data) return;
+  const d=JSON.parse(payload.toString());
+  document.querySelector(".temp").textContent=d.temp.toFixed(1);
+  document.querySelector(".press").textContent=d.press.toFixed(1);
+  document.querySelector(".alt").textContent=d.alt.toFixed(1);
+  push(chTemp,d.temp); push(chAlt,d.alt);
+
+  const box=document.getElementById("alertBox");
+  box.textContent="Trạng thái: "+(ALERT_TXT[d.alert]||d.alert);
+  box.classList.toggle("warn",d.alert!=="OK");
+
+  manual=(d.mode==="MANUAL");
+  document.getElementById("mode").textContent=d.mode;
+  document.getElementById("btnMode").textContent="Chế độ: "+d.mode+" (bấm để chuyển "+(manual?"AUTO":"MANUAL")+")";
+  if(manual){ ledOn=!!d.led; buzOn=!!d.buz; }
+  setBtn(document.getElementById("btnLed"),"LED: ",!!d.led);
+  setBtn(document.getElementById("btnBuz"),"LOA: ",!!d.buz);
+});
+
+document.getElementById("btnMode").onclick=()=>client.publish(T.mode,manual?"AUTO":"MANUAL");
+document.getElementById("btnLed").onclick=()=>{ if(!manual) return alert("Chuyển sang chế độ MANUAL để điều khiển LED"); ledOn=!ledOn; client.publish(T.led,ledOn?"ON":"OFF"); };
+document.getElementById("btnBuz").onclick=()=>{ if(!manual) return alert("Chuyển sang chế độ MANUAL để điều khiển Loa"); buzOn=!buzOn; client.publish(T.buz,buzOn?"ON":"OFF"); };
+</script>
+</body>
+</html>
