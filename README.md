@@ -103,7 +103,7 @@ Hệ thống được kiểm thử với các trường hợp:
 
 ## 10. Hình ảnh minh họa
 
-Các hình ảnh mô phỏng và kết quả thực hiện được lưu trong thư mục `images` của Repository.
+Các hình ảnh mô phỏng và kết quả thực hiện được lưu trong thư mục `images` và báo cáo.
 
 ## 11. Kết luận
 
